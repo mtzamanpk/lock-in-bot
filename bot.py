@@ -153,7 +153,6 @@ def save_user_data(user_data):
 
 # Initialize database on startup
 init_database()
-user_data = load_user_data()
 
 @bot.event
 async def on_ready():
@@ -259,12 +258,15 @@ async def checkin(interaction: discord.Interaction):
         from datetime import datetime
         current_date = datetime.now().strftime("%Y-%m-%d")
 
-        # Store the activities with the date - consolidate by date
-        if interaction.user.id not in user_data:
-            user_data[interaction.user.id] = {}
+        # Load current user data from database
+        current_user_data = load_user_data()
         
-        if current_date not in user_data[interaction.user.id]:
-            user_data[interaction.user.id][current_date] = {
+        # Store the activities with the date - consolidate by date
+        if interaction.user.id not in current_user_data:
+            current_user_data[interaction.user.id] = {}
+        
+        if current_date not in current_user_data[interaction.user.id]:
+            current_user_data[interaction.user.id][current_date] = {
                 'mental': [],
                 'physical': [],
                 'professional': []
@@ -273,13 +275,13 @@ async def checkin(interaction: discord.Interaction):
         # Add activities to their respective categories for the current date
         for item in selected_activities:
             category_key = item['category']
-            if category_key in user_data[interaction.user.id][current_date]:
+            if category_key in current_user_data[interaction.user.id][current_date]:
                 # Check if activity already exists to avoid duplicates
-                if item['activity'] not in user_data[interaction.user.id][current_date][category_key]:
-                    user_data[interaction.user.id][current_date][category_key].append(item['activity'])
+                if item['activity'] not in current_user_data[interaction.user.id][current_date][category_key]:
+                    current_user_data[interaction.user.id][current_date][category_key].append(item['activity'])
         
         # Save updated data to database
-        save_user_data(user_data)
+        save_user_data(current_user_data)
         
         # Create summary message
         summary = []
@@ -293,9 +295,12 @@ async def checkin(interaction: discord.Interaction):
 
 @bot.tree.command(name="mycheckins", description="View your previous check-ins")
 async def mycheckins(interaction: discord.Interaction):
+    # Always load fresh data from database
+    current_user_data = load_user_data()
+    
     # Display the user's previous check-ins with dates
-    if interaction.user.id in user_data:
-        checkins = user_data[interaction.user.id]
+    if interaction.user.id in current_user_data:
+        checkins = current_user_data[interaction.user.id]
         if checkins:
             checkin_str = ""
             # Sort dates in reverse order (most recent first)
