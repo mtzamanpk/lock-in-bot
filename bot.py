@@ -324,53 +324,67 @@ async def checkin(interaction: discord.Interaction):
 @bot.tree.command(name="checkins", description="View check-ins for any user")
 async def checkins_command(interaction: discord.Interaction):
     print(f"User {interaction.user.id} ({interaction.user.name}) requested checkins")
-    
+
     # Always load fresh data from database
     current_user_data = load_user_data()
     print(f"Loaded data for {len(current_user_data)} users")
-    
+
     if not current_user_data:
         await interaction.response.send_message("No check-ins found in the database.")
         return
-    
+
     # Create selection embed
     embed = discord.Embed(title="📊 Check-ins Available", description="Select whose check-ins you want to view:", color=discord.Color.blue())
-    
+
     user_list = []
     for i, (user_id, dates) in enumerate(current_user_data.items(), 1):
         # Count total activities for this user
         total_activities = sum(len(activities) for date_data in dates.values() for activities in date_data.values())
         user_list.append((user_id, dates, total_activities))
-        
+
+        # Try to get username from Discord
+        try:
+            user = await bot.get_user(int(user_id))
+            display_name = f"{user.name}#{user.discriminator}" if user else f"User {user_id}"
+        except:
+            display_name = f"User {user_id}"
+
         # Get the most recent date
         most_recent_date = max(dates.keys()) if dates else "No dates"
-        embed.add_field(name=f"{i}. User {user_id}", value=f"📅 Latest: {most_recent_date} | 📝 Total: {total_activities} activities", inline=False)
-    
+        embed.add_field(name=f"{i}. {display_name}", value=f"📅 Latest: {most_recent_date} | 📝 Total: {total_activities} activities", inline=False)
+
     embed.set_footer(text="Reply with the number of the user whose check-ins you want to view")
-    
+
     await interaction.response.send_message(embed=embed)
-    
+
     # Wait for user selection
     def check_selection(m):
         return m.author == interaction.user and m.channel == interaction.channel
-    
+
     try:
         selection_msg = await bot.wait_for('message', check=check_selection, timeout=60.0)
-        
+
         try:
             selection = int(selection_msg.content.strip())
             if 1 <= selection <= len(user_list):
                 selected_user_id, selected_user_dates, _ = user_list[selection - 1]
-                
+
+                # Try to get username for the selected user
+                try:
+                    selected_user = await bot.get_user(int(selected_user_id))
+                    selected_display_name = f"{selected_user.name}#{selected_user.discriminator}" if selected_user else f"User {selected_user_id}"
+                except:
+                    selected_display_name = f"User {selected_user_id}"
+
                 # Display the selected user's check-ins
-                checkin_str = f"📊 **Check-ins for User {selected_user_id}:**\n\n"
-                
+                checkin_str = f"📊 **Check-ins for {selected_display_name}:**\n\n"
+
                 # Sort dates in reverse order (most recent first)
                 sorted_dates = sorted(selected_user_dates.keys(), reverse=True)
-                
+
                 for date in sorted_dates[:10]:  # Show last 10 dates
                     checkin_str += f"📅 **{date}:**\n"
-                    
+
                     # Check each category and display activities if they exist
                     for category_key in ['mental', 'physical', 'professional']:
                         if category_key in selected_user_dates[date] and selected_user_dates[date][category_key]:
@@ -379,20 +393,149 @@ async def checkins_command(interaction: discord.Interaction):
                             checkin_str += f"  **{category_name}:**\n"
                             for activity in activities:
                                 checkin_str += f"    • {activity}\n"
-                    
+
                     checkin_str += "\n"
-                
-                response_embed = discord.Embed(title=f"Check-ins for User {selected_user_id}", description=checkin_str, color=discord.Color.green())
+
+                response_embed = discord.Embed(title=f"Check-ins for {selected_display_name}", description=checkin_str, color=discord.Color.green())
                 await interaction.followup.send(embed=response_embed)
-                
+
             else:
                 await interaction.followup.send(f"❌ Invalid selection. Please choose a number between 1 and {len(user_list)}.")
-                
+
         except ValueError:
             await interaction.followup.send("❌ Please enter a valid number.")
-            
+
     except asyncio.TimeoutError:
         await interaction.followup.send("⏰ You took too long to respond! Selection cancelled.")
+
+@bot.tree.command(name="mycheckins", description="View your own check-ins")
+async def mycheckins(interaction: discord.Interaction):
+    print(f"User {interaction.user.id} ({interaction.user.name}) requested their own check-ins")
+
+    # Always load fresh data from database
+    current_user_data = load_user_data()
+    print(f"Loaded data for {len(current_user_data)} users")
+
+    # Display the user's own check-ins
+    if str(interaction.user.id) in current_user_data:
+        checkins = current_user_data[str(interaction.user.id)]
+        print(f"Found {len(checkins)} dates for user {interaction.user.id}")
+
+        if checkins:
+            checkin_str = ""
+            # Sort dates in reverse order (most recent first)
+            sorted_dates = sorted(checkins.keys(), reverse=True)
+            print(f"Sorted dates: {sorted_dates[:5]}...")  # Show first 5 dates
+
+            for date in sorted_dates[:10]:  # Show last 10 dates
+                checkin_str += f"📅 **{date}:**\n"
+
+                # Check each category and display activities if they exist
+                for category_key in ['mental', 'physical', 'professional']:
+                    if category_key in checkins[date] and checkins[date][category_key]:
+                        category_name = checklist_categories[category_key]['name']
+                        activities = checkins[date][category_key]
+                        checkin_str += f"  **{category_name}:**\n"
+                        for activity in activities:
+                            checkin_str += f"    • {activity}\n"
+
+                checkin_str += "\n"
+
+            embed = discord.Embed(title="Your Previous Check-ins", description=checkin_str, color=discord.Color.green())
+            await interaction.response.send_message(embed=embed)
+        else:
+            print("User has no check-ins")
+            await interaction.response.send_message("You haven't checked in yet!")
+    else:
+        print(f"User {interaction.user.id} not found in data")
+        await interaction.response.send_message("You haven't checked in yet!")
+
+@bot.tree.command(name="deletecheckin", description="Delete check-ins for a specific date")
+async def deletecheckin(interaction: discord.Interaction):
+    print(f"User {interaction.user.id} ({interaction.user.name}) requested to delete check-ins")
+
+    # Always load fresh data from database
+    current_user_data = load_user_data()
+
+    # Check if user has any check-ins
+    if str(interaction.user.id) not in current_user_data or not current_user_data[str(interaction.user.id)]:
+        await interaction.response.send_message("You have no check-ins to delete!")
+        return
+
+    user_dates = current_user_data[str(interaction.user.id)]
+
+    # Create selection embed for dates
+    embed = discord.Embed(title="🗑️ Delete Check-ins", description="Select which date's check-ins you want to delete:", color=discord.Color.red())
+
+    date_list = []
+    for i, date in enumerate(sorted(user_dates.keys(), reverse=True), 1):
+        # Count activities for this date
+        total_activities = sum(len(activities) for activities in user_dates[date].values())
+        date_list.append(date)
+
+        # Show what activities are on this date
+        activities_summary = []
+        for category_key in ['mental', 'physical', 'professional']:
+            if category_key in user_dates[date] and user_dates[date][category_key]:
+                category_name = checklist_categories[category_key]['name']
+                activities_summary.append(f"{category_name}: {len(user_dates[date][category_key])}")
+
+        activities_str = ", ".join(activities_summary) if activities_summary else "No activities"
+        embed.add_field(name=f"{i}. {date}", value=f"📝 {activities_str}", inline=False)
+
+    embed.set_footer(text="Reply with the number of the date you want to delete, or 'cancel' to cancel")
+
+    await interaction.response.send_message(embed=embed)
+
+    # Wait for user selection
+    def check_selection(m):
+        return m.author == interaction.user and m.channel == interaction.channel
+
+    try:
+        selection_msg = await bot.wait_for('message', check=check_selection, timeout=60.0)
+
+        selection = selection_msg.content.strip().lower()
+
+        if selection == 'cancel':
+            await interaction.followup.send("❌ Deletion cancelled.")
+            return
+
+        try:
+            selection_num = int(selection)
+            if 1 <= selection_num <= len(date_list):
+                selected_date = date_list[selection_num - 1]
+
+                # Delete from database
+                conn = get_db_connection()
+                if conn:
+                    try:
+                        with conn.cursor() as cur:
+                            cur.execute("""
+                                DELETE FROM checkins
+                                WHERE user_id = %s AND checkin_date = %s
+                            """, (interaction.user.id, selected_date))
+
+                            deleted_count = cur.rowcount
+                            conn.commit()
+
+                        await interaction.followup.send(f"✅ Deleted {deleted_count} check-in(s) for {selected_date}")
+
+                    except Exception as e:
+                        print(f"Error deleting check-ins: {e}")
+                        await interaction.followup.send("❌ Error deleting check-ins")
+                    finally:
+                        conn.close()
+                else:
+                    await interaction.followup.send("❌ Database connection failed")
+
+            else:
+                await interaction.followup.send(f"❌ Invalid selection. Please choose a number between 1 and {len(date_list)}.")
+
+        except ValueError:
+            await interaction.followup.send("❌ Please enter a valid number or 'cancel'.")
+
+    except asyncio.TimeoutError:
+        await interaction.followup.send("⏰ You took too long to respond! Deletion cancelled.")
 
 # Use environment variable for the bot token
 bot.run(os.getenv('DISCORD_TOKEN'))
