@@ -4,6 +4,8 @@ from discord.ext import commands
 import os  # Import os to access environment variables
 import json  # Import json for data handling
 import asyncio  # Import asyncio for async operations
+import psycopg2  # Import PostgreSQL driver
+from psycopg2.extras import RealDictCursor
 
 # Create bot instance with intents (need message_content to read user responses)
 intents = discord.Intents.default()
@@ -26,19 +28,132 @@ checklist_categories = {
     }
 }
 
-# Load user data from a JSON file
-def load_user_data():
+# Database connection function
+def get_db_connection():
     try:
-        with open('user_data.json', 'r') as file:
-            return json.load(file)
-    except FileNotFoundError:
+        return psycopg2.connect(os.getenv('DATABASE_URL'))
+    except Exception as e:
+        print(f"Database connection failed: {e}")
+        return None
+
+# Initialize database tables
+def init_database():
+    conn = get_db_connection()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                # Create users table
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        user_id BIGINT PRIMARY KEY,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                
+                # Create checkins table
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS checkins (
+                        id SERIAL PRIMARY KEY,
+                        user_id BIGINT REFERENCES users(user_id),
+                        checkin_date DATE NOT NULL,
+                        category VARCHAR(20) NOT NULL,
+                        activity VARCHAR(100) NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(user_id, checkin_date, category, activity)
+                    )
+                """)
+                
+                conn.commit()
+                print("Database initialized successfully")
+        except Exception as e:
+            print(f"Database initialization failed: {e}")
+        finally:
+            conn.close()
+
+# Load user data from database
+def load_user_data():
+    conn = get_db_connection()
+    if not conn:
         return {}
+    
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Get all checkins grouped by user, date, and category
+            cur.execute("""
+                SELECT user_id, checkin_date, category, activity
+                FROM checkins
+                ORDER BY checkin_date DESC, created_at ASC
+            """)
+            
+            rows = cur.fetchall()
+            
+            # Organize data by user and date
+            user_data = {}
+            for row in rows:
+                user_id = str(row['user_id'])
+                date = row['checkin_date'].strftime('%Y-%m-%d')
+                category = row['category']
+                activity = row['activity']
+                
+                if user_id not in user_data:
+                    user_data[user_id] = {}
+                
+                if date not in user_data[user_id]:
+                    user_data[user_id][date] = {
+                        'mental': [],
+                        'physical': [],
+                        'professional': []
+                    }
+                
+                if activity not in user_data[user_id][date][category]:
+                    user_data[user_id][date][category].append(activity)
+            
+            return user_data
+            
+    except Exception as e:
+        print(f"Error loading user data: {e}")
+        return {}
+    finally:
+        conn.close()
 
-# Save user data to a JSON file
-def save_user_data(data):
-    with open('user_data.json', 'w') as file:
-        json.dump(data, file)
+# Save user data to database
+def save_user_data(user_data):
+    conn = get_db_connection()
+    if not conn:
+        return False
+    
+    try:
+        with conn.cursor() as cur:
+            for user_id, dates in user_data.items():
+                # Ensure user exists
+                cur.execute("""
+                    INSERT INTO users (user_id) 
+                    VALUES (%s) 
+                    ON CONFLICT (user_id) DO NOTHING
+                """, (int(user_id),))
+                
+                for date, categories in dates.items():
+                    for category, activities in categories.items():
+                        for activity in activities:
+                            # Insert checkin (will skip duplicates due to UNIQUE constraint)
+                            cur.execute("""
+                                INSERT INTO checkins (user_id, checkin_date, category, activity)
+                                VALUES (%s, %s, %s, %s)
+                                ON CONFLICT (user_id, checkin_date, category, activity) DO NOTHING
+                            """, (int(user_id), date, category, activity))
+            
+            conn.commit()
+            return True
+            
+    except Exception as e:
+        print(f"Error saving user data: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
 
+# Initialize database on startup
+init_database()
 user_data = load_user_data()
 
 @bot.event
