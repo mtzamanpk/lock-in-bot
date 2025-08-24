@@ -173,8 +173,16 @@ async def on_ready():
     try:
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} command(s)")
+        print("Synced commands:")
+        for cmd in synced:
+            print(f"  - /{cmd.name}: {cmd.description}")
     except Exception as e:
         print(f"Failed to sync commands: {e}")
+    
+    # Also print all registered commands
+    print("\nAll registered commands:")
+    for cmd in bot.tree.get_commands():
+        print(f"  - /{cmd.name}: {cmd.description}")
 
 @bot.tree.command(name="checkin", description="Check in with your daily activities")
 async def checkin(interaction: discord.Interaction):
