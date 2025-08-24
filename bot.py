@@ -145,14 +145,24 @@ async def checkin(interaction: discord.Interaction):
         from datetime import datetime
         current_date = datetime.now().strftime("%Y-%m-%d")
 
-        # Store the activities with the date
+        # Store the activities with the date - consolidate by date
         if interaction.user.id not in user_data:
-            user_data[interaction.user.id] = []
+            user_data[interaction.user.id] = {}
         
-        user_data[interaction.user.id].append({
-            'date': current_date, 
-            'activities': selected_activities
-        })
+        if current_date not in user_data[interaction.user.id]:
+            user_data[interaction.user.id][current_date] = {
+                'mental': [],
+                'physical': [],
+                'professional': []
+            }
+        
+        # Add activities to their respective categories for the current date
+        for item in selected_activities:
+            category_key = item['category']
+            if category_key in user_data[interaction.user.id][current_date]:
+                # Check if activity already exists to avoid duplicates
+                if item['activity'] not in user_data[interaction.user.id][current_date][category_key]:
+                    user_data[interaction.user.id][current_date][category_key].append(item['activity'])
         
         # Save updated data to the file
         save_user_data(user_data)
@@ -174,12 +184,22 @@ async def mycheckins(interaction: discord.Interaction):
         checkins = user_data[interaction.user.id]
         if checkins:
             checkin_str = ""
-            for checkin in checkins[-10:]:  # Show last 10
-                activities_summary = []
-                for item in checkin['activities']:
-                    activities_summary.append(f"{item['activity']} ({checklist_categories[item['category']]['name']})")
+            # Sort dates in reverse order (most recent first)
+            sorted_dates = sorted(checkins.keys(), reverse=True)
+            
+            for date in sorted_dates[:10]:  # Show last 10 dates
+                checkin_str += f"📅 **{date}:**\n"
                 
-                checkin_str += f"📅 **{checkin['date']}:**\n" + "\n".join([f"  • {item}" for item in activities_summary]) + "\n\n"
+                # Check each category and display activities if they exist
+                for category_key in ['mental', 'physical', 'professional']:
+                    if category_key in checkins[date] and checkins[date][category_key]:
+                        category_name = checklist_categories[category_key]['name']
+                        activities = checkins[date][category_key]
+                        checkin_str += f"  **{category_name}:**\n"
+                        for activity in activities:
+                            checkin_str += f"    • {activity}\n"
+                
+                checkin_str += "\n"
             
             embed = discord.Embed(title="Your Previous Check-ins", description=checkin_str, color=discord.Color.green())
             await interaction.response.send_message(embed=embed)
