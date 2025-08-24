@@ -356,5 +356,44 @@ async def help_command(interaction: discord.Interaction):
     embed.add_field(name="/help", value="Show this help message", inline=False)
     await interaction.response.send_message(embed=embed)
 
+@bot.tree.command(name="debug", description="Debug database contents (admin only)")
+async def debug_command(interaction: discord.Interaction):
+    # Only allow the bot owner to use this command
+    if interaction.user.id != 219995929254690816:  # Your user ID
+        await interaction.response.send_message("❌ This command is for debugging only.")
+        return
+    
+    print("Debug command executed")
+    conn = get_db_connection()
+    if not conn:
+        await interaction.response.send_message("❌ Database connection failed")
+        return
+    
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Check users table
+            cur.execute("SELECT * FROM users ORDER BY created_at DESC")
+            users = cur.fetchall()
+            
+            # Check checkins table
+            cur.execute("SELECT * FROM checkins ORDER BY created_at DESC LIMIT 10")
+            checkins = cur.fetchall()
+            
+            debug_info = f"**Database Debug Info:**\n\n"
+            debug_info += f"**Users ({len(users)}):**\n"
+            for user in users:
+                debug_info += f"• User ID: `{user['user_id']}` (Created: {user['created_at']})\n"
+            
+            debug_info += f"\n**Recent Check-ins ({len(checkins)}):**\n"
+            for checkin in checkins:
+                debug_info += f"• User: `{checkin['user_id']}` | Date: {checkin['checkin_date']} | Category: {checkin['category']} | Activity: {checkin['activity']}\n"
+            
+            await interaction.response.send_message(debug_info)
+            
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Error: {e}")
+    finally:
+        conn.close()
+
 # Use environment variable for the bot token
 bot.run(os.getenv('DISCORD_TOKEN'))
