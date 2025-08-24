@@ -2,7 +2,6 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 import os  # Import os to access environment variables
-import json  # Import json for data handling
 import asyncio  # Import asyncio for async operations
 import psycopg2  # Import PostgreSQL driver
 from psycopg2.extras import RealDictCursor
@@ -279,7 +278,7 @@ async def checkin(interaction: discord.Interaction):
                 if item['activity'] not in user_data[interaction.user.id][current_date][category_key]:
                     user_data[interaction.user.id][current_date][category_key].append(item['activity'])
         
-        # Save updated data to the file
+        # Save updated data to database
         save_user_data(user_data)
         
         # Create summary message
@@ -332,4 +331,4 @@ async def help_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 # Use environment variable for the bot token
-bot.run(os.getenv('DISCORD_TOKEN'))  # Replace with your bot's token
+bot.run(os.getenv('DISCORD_TOKEN'))
