@@ -30,13 +30,17 @@ checklist_categories = {
 # Database connection function
 def get_db_connection():
     try:
-        return psycopg2.connect(os.getenv('DATABASE_URL'))
+        print(f"Attempting to connect to database with URL: {os.getenv('DATABASE_URL')[:20]}...")
+        conn = psycopg2.connect(os.getenv('DATABASE_URL'))
+        print("Database connection successful")
+        return conn
     except Exception as e:
         print(f"Database connection failed: {e}")
         return None
 
 # Initialize database tables
 def init_database():
+    print("Initializing database...")
     conn = get_db_connection()
     if conn:
         try:
@@ -68,11 +72,15 @@ def init_database():
             print(f"Database initialization failed: {e}")
         finally:
             conn.close()
+    else:
+        print("Failed to initialize database - no connection")
 
 # Load user data from database
 def load_user_data():
+    print("Loading user data from database...")
     conn = get_db_connection()
     if not conn:
+        print("No database connection, returning empty data")
         return {}
     
     try:
@@ -85,6 +93,7 @@ def load_user_data():
             """)
             
             rows = cur.fetchall()
+            print(f"Found {len(rows)} check-in records in database")
             
             # Organize data by user and date
             user_data = {}
@@ -107,6 +116,7 @@ def load_user_data():
                 if activity not in user_data[user_id][date][category]:
                     user_data[user_id][date][category].append(activity)
             
+            print(f"Organized data for {len(user_data)} users")
             return user_data
             
     except Exception as e:
@@ -117,8 +127,10 @@ def load_user_data():
 
 # Save user data to database
 def save_user_data(user_data):
+    print("Saving user data to database...")
     conn = get_db_connection()
     if not conn:
+        print("No database connection, cannot save data")
         return False
     
     try:
@@ -142,6 +154,7 @@ def save_user_data(user_data):
                             """, (int(user_id), date, category, activity))
             
             conn.commit()
+            print("Data saved successfully to database")
             return True
             
     except Exception as e:
@@ -295,16 +308,22 @@ async def checkin(interaction: discord.Interaction):
 
 @bot.tree.command(name="mycheckins", description="View your previous check-ins")
 async def mycheckins(interaction: discord.Interaction):
+    print(f"User {interaction.user.id} ({interaction.user.name}) requested check-ins")
+    
     # Always load fresh data from database
     current_user_data = load_user_data()
+    print(f"Loaded data for {len(current_user_data)} users")
     
     # Display the user's previous check-ins with dates
     if interaction.user.id in current_user_data:
         checkins = current_user_data[interaction.user.id]
+        print(f"Found {len(checkins)} dates for user {interaction.user.id}")
+        
         if checkins:
             checkin_str = ""
             # Sort dates in reverse order (most recent first)
             sorted_dates = sorted(checkins.keys(), reverse=True)
+            print(f"Sorted dates: {sorted_dates[:5]}...")  # Show first 5 dates
             
             for date in sorted_dates[:10]:  # Show last 10 dates
                 checkin_str += f"📅 **{date}:**\n"
@@ -323,8 +342,10 @@ async def mycheckins(interaction: discord.Interaction):
             embed = discord.Embed(title="Your Previous Check-ins", description=checkin_str, color=discord.Color.green())
             await interaction.response.send_message(embed=embed)
         else:
+            print("User has no check-ins")
             await interaction.response.send_message("You haven't checked in yet!")
     else:
+        print(f"User {interaction.user.id} not found in data")
         await interaction.response.send_message("You haven't checked in yet!")
 
 @bot.tree.command(name="help", description="Show available commands")
