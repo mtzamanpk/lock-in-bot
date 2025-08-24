@@ -321,17 +321,90 @@ async def checkin(interaction: discord.Interaction):
     except asyncio.TimeoutError:
         await interaction.followup.send("⏰ You took too long to respond! Check-in cancelled.")
 
-@bot.tree.command(name="mycheckins", description="View your previous check-ins")
-async def mycheckins(interaction: discord.Interaction):
-    print(f"User {interaction.user.id} ({interaction.user.name}) requested check-ins")
+@bot.tree.command(name="checkins", description="View check-ins for any user")
+async def checkins_command(interaction: discord.Interaction):
+    print(f"User {interaction.user.id} ({interaction.user.name}) requested checkins")
     
     # Always load fresh data from database
     current_user_data = load_user_data()
     print(f"Loaded data for {len(current_user_data)} users")
     
-    # Display the user's previous check-ins with dates
-    if interaction.user.id in current_user_data:
-        checkins = current_user_data[interaction.user.id]
+    if not current_user_data:
+        await interaction.response.send_message("No check-ins found in the database.")
+        return
+    
+    # Create selection embed
+    embed = discord.Embed(title="📊 Check-ins Available", description="Select whose check-ins you want to view:", color=discord.Color.blue())
+    
+    user_list = []
+    for i, (user_id, dates) in enumerate(current_user_data.items(), 1):
+        # Count total activities for this user
+        total_activities = sum(len(activities) for date_data in dates.values() for activities in date_data.values())
+        user_list.append((user_id, dates, total_activities))
+        
+        # Get the most recent date
+        most_recent_date = max(dates.keys()) if dates else "No dates"
+        embed.add_field(name=f"{i}. User {user_id}", value=f"📅 Latest: {most_recent_date} | 📝 Total: {total_activities} activities", inline=False)
+    
+    embed.set_footer(text="Reply with the number of the user whose check-ins you want to view")
+    
+    await interaction.response.send_message(embed=embed)
+    
+    # Wait for user selection
+    def check_selection(m):
+        return m.author == interaction.user and m.channel == interaction.channel
+    
+    try:
+        selection_msg = await bot.wait_for('message', check=check_selection, timeout=60.0)
+        
+        try:
+            selection = int(selection_msg.content.strip())
+            if 1 <= selection <= len(user_list):
+                selected_user_id, selected_user_dates, _ = user_list[selection - 1]
+                
+                # Display the selected user's check-ins
+                checkin_str = f"📊 **Check-ins for User {selected_user_id}:**\n\n"
+                
+                # Sort dates in reverse order (most recent first)
+                sorted_dates = sorted(selected_user_dates.keys(), reverse=True)
+                
+                for date in sorted_dates[:10]:  # Show last 10 dates
+                    checkin_str += f"📅 **{date}:**\n"
+                    
+                    # Check each category and display activities if they exist
+                    for category_key in ['mental', 'physical', 'professional']:
+                        if category_key in selected_user_dates[date] and selected_user_dates[date][category_key]:
+                            category_name = checklist_categories[category_key]['name']
+                            activities = selected_user_dates[date][category_key]
+                            checkin_str += f"  **{category_name}:**\n"
+                            for activity in activities:
+                                checkin_str += f"    • {activity}\n"
+                    
+                    checkin_str += "\n"
+                
+                response_embed = discord.Embed(title=f"Check-ins for User {selected_user_id}", description=checkin_str, color=discord.Color.green())
+                await interaction.followup.send(embed=response_embed)
+                
+            else:
+                await interaction.followup.send(f"❌ Invalid selection. Please choose a number between 1 and {len(user_list)}.")
+                
+        except ValueError:
+            await interaction.followup.send("❌ Please enter a valid number.")
+            
+    except asyncio.TimeoutError:
+        await interaction.followup.send("⏰ You took too long to respond! Selection cancelled.")
+
+@bot.tree.command(name="mycheckins", description="View your own check-ins")
+async def mycheckins(interaction: discord.Interaction):
+    print(f"User {interaction.user.id} ({interaction.user.name}) requested their own check-ins")
+    
+    # Always load fresh data from database
+    current_user_data = load_user_data()
+    print(f"Loaded data for {len(current_user_data)} users")
+    
+    # Display the user's own check-ins
+    if str(interaction.user.id) in current_user_data:
+        checkins = current_user_data[str(interaction.user.id)]
         print(f"Found {len(checkins)} dates for user {interaction.user.id}")
         
         if checkins:
@@ -367,7 +440,8 @@ async def mycheckins(interaction: discord.Interaction):
 async def help_command(interaction: discord.Interaction):
     embed = discord.Embed(title="Lock-in Bot Commands", description="Available commands:", color=discord.Color.blue())
     embed.add_field(name="/checkin", value="Start your daily check-in process with categories and activities", inline=False)
-    embed.add_field(name="/mycheckins", value="View your previous check-ins", inline=False)
+    embed.add_field(name="/checkins", value="View check-ins for any user (shows list to choose from)", inline=False)
+    embed.add_field(name="/mycheckins", value="View your own personal check-ins", inline=False)
     embed.add_field(name="/help", value="Show this help message", inline=False)
     await interaction.response.send_message(embed=embed)
 
