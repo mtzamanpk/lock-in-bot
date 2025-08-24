@@ -1,9 +1,11 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-import os  # Import os to access environment variables
-import asyncio  # Import asyncio for async operations
-import psycopg2  # Import PostgreSQL driver
+import os
+import asyncio
+from datetime import datetime
+from typing import Dict, List, Optional, Any
+import psycopg2
 from psycopg2.extras import RealDictCursor
 
 # Create bot instance with intents (need message_content to read user responses)
@@ -27,12 +29,15 @@ checklist_categories = {
     }
 }
 
-# Database connection function
-def get_db_connection():
+def get_db_connection() -> Optional[psycopg2.extensions.connection]:
+    """Establish database connection."""
     try:
-        print(f"Attempting to connect to database with URL: {os.getenv('DATABASE_URL')[:20]}...")
-        conn = psycopg2.connect(os.getenv('DATABASE_URL'))
-        print("Database connection successful")
+        database_url = os.getenv('DATABASE_URL')
+        if not database_url:
+            print("DATABASE_URL environment variable not set")
+            return None
+
+        conn = psycopg2.connect(database_url)
         return conn
     except Exception as e:
         print(f"Database connection failed: {e}")
@@ -75,95 +80,89 @@ def init_database():
     else:
         print("Failed to initialize database - no connection")
 
-# Load user data from database
-def load_user_data():
-    print("Loading user data from database...")
+def load_user_data() -> Dict[str, Dict[str, Dict[str, List[str]]]]:
+    """Load all user check-in data from database.
+
+    Returns:
+        Dictionary structure: {user_id: {date: {category: [activities]}}}
+    """
     conn = get_db_connection()
     if not conn:
-        print("No database connection, returning empty data")
         return {}
-    
+
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            # Get all checkins grouped by user, date, and category
             cur.execute("""
                 SELECT user_id, checkin_date, category, activity
                 FROM checkins
                 ORDER BY checkin_date DESC, created_at ASC
             """)
-            
+
             rows = cur.fetchall()
-            print(f"Found {len(rows)} check-in records in database")
-            
-            # Debug: Show what user IDs we're finding
-            user_ids_found = set()
-            for row in rows:
-                user_ids_found.add(row['user_id'])
-            print(f"User IDs found in database: {user_ids_found}")
-            
-            # Organize data by user and date
-            user_data = {}
+            user_data: Dict[str, Dict[str, Dict[str, List[str]]]] = {}
+
             for row in rows:
                 user_id = str(row['user_id'])
                 date = row['checkin_date'].strftime('%Y-%m-%d')
                 category = row['category']
                 activity = row['activity']
-                
+
                 if user_id not in user_data:
                     user_data[user_id] = {}
-                
+
                 if date not in user_data[user_id]:
                     user_data[user_id][date] = {
                         'mental': [],
                         'physical': [],
                         'professional': []
                     }
-                
+
                 if activity not in user_data[user_id][date][category]:
                     user_data[user_id][date][category].append(activity)
-            
-            print(f"Organized data for {len(user_data)} users")
-            print(f"User IDs in organized data: {list(user_data.keys())}")
+
             return user_data
-            
+
     except Exception as e:
         print(f"Error loading user data: {e}")
         return {}
     finally:
         conn.close()
 
-# Save user data to database
-def save_user_data(user_data):
-    print("Saving user data to database...")
+def save_user_data(user_data: Dict[str, Dict[str, Dict[str, List[str]]]]) -> bool:
+    """Save user check-in data to database.
+
+    Args:
+        user_data: Dictionary structure {user_id: {date: {category: [activities]}}}
+
+    Returns:
+        True if successful, False otherwise
+    """
     conn = get_db_connection()
     if not conn:
-        print("No database connection, cannot save data")
         return False
-    
+
     try:
         with conn.cursor() as cur:
             for user_id, dates in user_data.items():
                 # Ensure user exists
                 cur.execute("""
-                    INSERT INTO users (user_id) 
-                    VALUES (%s) 
+                    INSERT INTO users (user_id)
+                    VALUES (%s)
                     ON CONFLICT (user_id) DO NOTHING
                 """, (int(user_id),))
-                
+
                 for date, categories in dates.items():
                     for category, activities in categories.items():
                         for activity in activities:
-                            # Insert checkin (will skip duplicates due to UNIQUE constraint)
                             cur.execute("""
                                 INSERT INTO checkins (user_id, checkin_date, category, activity)
                                 VALUES (%s, %s, %s, %s)
                                 ON CONFLICT (user_id, checkin_date, category, activity) DO NOTHING
                             """, (int(user_id), date, category, activity))
-            
+
             conn.commit()
-            print("Data saved successfully to database")
             return True
-            
+
     except Exception as e:
         print(f"Error saving user data: {e}")
         conn.rollback()
@@ -179,17 +178,11 @@ async def on_ready():
     print(f"Logged in as {bot.user}")
     try:
         synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} command(s)")
-        print("Synced commands:")
+        print(f"Successfully synced {len(synced)} commands")
         for cmd in synced:
             print(f"  - /{cmd.name}: {cmd.description}")
     except Exception as e:
         print(f"Failed to sync commands: {e}")
-    
-    # Also print all registered commands
-    print("\nAll registered commands:")
-    for cmd in bot.tree.get_commands():
-        print(f"  - /{cmd.name}: {cmd.description}")
 
 @bot.tree.command(name="checkin", description="Check in with your daily activities")
 async def checkin(interaction: discord.Interaction):
@@ -234,18 +227,16 @@ async def checkin(interaction: discord.Interaction):
         # Now show activities for selected categories
         activities_embed = discord.Embed(title="📋 Select Activities", description="Choose the activities you completed:", color=discord.Color.green())
         
-        all_activities = []
         activity_mapping = {}  # Maps display number to (category, activity)
         display_number = 1
-        
+
         for category_key in selected_categories:
             category = checklist_categories[category_key]
             activities_embed.add_field(name=f"**{category['name']}**", value="", inline=False)
-            
+
             for activity in category['activities']:
                 activities_embed.add_field(name=f"{display_number}. {activity}", value=f"({category['name']})", inline=True)
                 activity_mapping[display_number] = (category_key, activity)
-                all_activities.append(activity)
                 display_number += 1
         
         activities_embed.set_footer(text=f"Reply with the numbers of activities you completed (e.g., 1 3 5)")
@@ -282,41 +273,37 @@ async def checkin(interaction: discord.Interaction):
             await interaction.followup.send(f"Invalid input. Please use numbers from the activities list.")
             return
         
-        # Get the current date
-        from datetime import datetime
+        # Get the current date and save check-ins
         current_date = datetime.now().strftime("%Y-%m-%d")
-
-        # Load current user data from database
         current_user_data = load_user_data()
-        
-        # Store the activities with the date - consolidate by date
-        if interaction.user.id not in current_user_data:
-            current_user_data[interaction.user.id] = {}
-        
-        if current_date not in current_user_data[interaction.user.id]:
-            current_user_data[interaction.user.id][current_date] = {
+
+        # Initialize user data structure if needed
+        user_id_str = str(interaction.user.id)
+        if user_id_str not in current_user_data:
+            current_user_data[user_id_str] = {}
+
+        if current_date not in current_user_data[user_id_str]:
+            current_user_data[user_id_str][current_date] = {
                 'mental': [],
                 'physical': [],
                 'professional': []
             }
-        
-        # Add activities to their respective categories for the current date
+
+        # Add activities to their respective categories
         for item in selected_activities:
             category_key = item['category']
-            if category_key in current_user_data[interaction.user.id][current_date]:
-                # Check if activity already exists to avoid duplicates
-                if item['activity'] not in current_user_data[interaction.user.id][current_date][category_key]:
-                    current_user_data[interaction.user.id][current_date][category_key].append(item['activity'])
-        
-        # Save updated data to database
+            activity = item['activity']
+            if activity not in current_user_data[user_id_str][current_date][category_key]:
+                current_user_data[user_id_str][current_date][category_key].append(activity)
+
+        # Save to database and send confirmation
         save_user_data(current_user_data)
-        
-        # Create summary message
-        summary = []
-        for item in selected_activities:
-            summary.append(f"{item['activity']} ({checklist_categories[item['category']]['name']})")
-        
-        await interaction.followup.send(f"✅ **Check-in recorded for {current_date}:**\n" + "\n".join([f"• {item}" for item in summary]))
+
+        summary = [f"{item['activity']} ({checklist_categories[item['category']]['name']})"
+                  for item in selected_activities]
+
+        await interaction.followup.send(f"✅ **Check-in recorded for {current_date}:**\n" +
+                                       "\n".join([f"• {item}" for item in summary]))
         
     except asyncio.TimeoutError:
         await interaction.followup.send("⏰ You took too long to respond! Check-in cancelled.")
@@ -324,70 +311,51 @@ async def checkin(interaction: discord.Interaction):
 
 @bot.tree.command(name="mycheckins", description="View your own check-ins")
 async def mycheckins(interaction: discord.Interaction):
-    print(f"User {interaction.user.id} ({interaction.user.name}) requested their own check-ins")
-
-    # Always load fresh data from database
     current_user_data = load_user_data()
-    print(f"Loaded data for {len(current_user_data)} users")
+    user_id_str = str(interaction.user.id)
 
-    # Display the user's own check-ins
-    if str(interaction.user.id) in current_user_data:
-        checkins = current_user_data[str(interaction.user.id)]
-        print(f"Found {len(checkins)} dates for user {interaction.user.id}")
-
-        if checkins:
-            checkin_str = ""
-            # Sort dates in reverse order (most recent first)
-            sorted_dates = sorted(checkins.keys(), reverse=True)
-            print(f"Sorted dates: {sorted_dates[:5]}...")  # Show first 5 dates
-
-            for date in sorted_dates[:10]:  # Show last 10 dates
-                checkin_str += f"📅 **{date}:**\n"
-
-                # Check each category and display activities if they exist
-                for category_key in ['mental', 'physical', 'professional']:
-                    if category_key in checkins[date] and checkins[date][category_key]:
-                        category_name = checklist_categories[category_key]['name']
-                        activities = checkins[date][category_key]
-                        checkin_str += f"  **{category_name}:**\n"
-                        for activity in activities:
-                            checkin_str += f"    • {activity}\n"
-
-                checkin_str += "\n"
-
-            embed = discord.Embed(title="Your Previous Check-ins", description=checkin_str, color=discord.Color.green())
-            await interaction.response.send_message(embed=embed)
-        else:
-            print("User has no check-ins")
-            await interaction.response.send_message("You haven't checked in yet!")
-    else:
-        print(f"User {interaction.user.id} not found in data")
+    if user_id_str not in current_user_data or not current_user_data[user_id_str]:
         await interaction.response.send_message("You haven't checked in yet!")
+        return
+
+    checkins = current_user_data[user_id_str]
+    sorted_dates = sorted(checkins.keys(), reverse=True)
+
+    checkin_str = ""
+    for date in sorted_dates[:10]:  # Show last 10 dates
+        checkin_str += f"📅 **{date}:**\n"
+
+        for category_key in ['mental', 'physical', 'professional']:
+            if category_key in checkins[date] and checkins[date][category_key]:
+                category_name = checklist_categories[category_key]['name']
+                activities = checkins[date][category_key]
+                checkin_str += f"  **{category_name}:**\n"
+                for activity in activities:
+                    checkin_str += f"    • {activity}\n"
+
+        checkin_str += "\n"
+
+    embed = discord.Embed(title="Your Previous Check-ins", description=checkin_str, color=discord.Color.green())
+    await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="deletecheckin", description="Delete check-ins for a specific date")
 async def deletecheckin(interaction: discord.Interaction):
-    print(f"User {interaction.user.id} ({interaction.user.name}) requested to delete check-ins")
-
-    # Always load fresh data from database
     current_user_data = load_user_data()
+    user_id_str = str(interaction.user.id)
 
-    # Check if user has any check-ins
-    if str(interaction.user.id) not in current_user_data or not current_user_data[str(interaction.user.id)]:
+    if user_id_str not in current_user_data or not current_user_data[user_id_str]:
         await interaction.response.send_message("You have no check-ins to delete!")
         return
 
-    user_dates = current_user_data[str(interaction.user.id)]
+    user_dates = current_user_data[user_id_str]
+    date_list = list(sorted(user_dates.keys(), reverse=True))
 
-    # Create selection embed for dates
-    embed = discord.Embed(title="🗑️ Delete Check-ins", description="Select which date's check-ins you want to delete:", color=discord.Color.red())
+    # Create selection embed
+    embed = discord.Embed(title="🗑️ Delete Check-ins",
+                         description="Select which date's check-ins you want to delete:",
+                         color=discord.Color.red())
 
-    date_list = []
-    for i, date in enumerate(sorted(user_dates.keys(), reverse=True), 1):
-        # Count activities for this date
-        total_activities = sum(len(activities) for activities in user_dates[date].values())
-        date_list.append(date)
-
-        # Show what activities are on this date
+    for i, date in enumerate(date_list, 1):
         activities_summary = []
         for category_key in ['mental', 'physical', 'professional']:
             if category_key in user_dates[date] and user_dates[date][category_key]:
@@ -398,16 +366,13 @@ async def deletecheckin(interaction: discord.Interaction):
         embed.add_field(name=f"{i}. {date}", value=f"📝 {activities_str}", inline=False)
 
     embed.set_footer(text="Reply with the number of the date you want to delete, or 'cancel' to cancel")
-
     await interaction.response.send_message(embed=embed)
 
-    # Wait for user selection
     def check_selection(m):
         return m.author == interaction.user and m.channel == interaction.channel
 
     try:
         selection_msg = await bot.wait_for('message', check=check_selection, timeout=60.0)
-
         selection = selection_msg.content.strip().lower()
 
         if selection == 'cancel':
@@ -441,7 +406,6 @@ async def deletecheckin(interaction: discord.Interaction):
                         conn.close()
                 else:
                     await interaction.followup.send("❌ Database connection failed")
-
             else:
                 await interaction.followup.send(f"❌ Invalid selection. Please choose a number between 1 and {len(date_list)}.")
 
