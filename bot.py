@@ -1,12 +1,30 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
 import os  # Import os to access environment variables
+import json  # Import json for data handling
+import asyncio  # Import asyncio for async operations
 
-# Create bot instance
-bot = commands.Bot(command_prefix="!")
+# Create bot instance with intents (need message_content to read user responses)
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-# A simple checklist (you can expand this)
-checklist = ["Work", "Exercise", "Read", "Cook", "Learn something new"]
+# A hierarchical checklist system
+checklist_categories = {
+    "mental": {
+        "name": "Mental & Spiritual",
+        "activities": ["Prayed Fajr", "Prayed Dhur", "Prayed Asr", "Prayed Maghrib", "Prayed Isha", "Read Quran"]
+    },
+    "physical": {
+        "name": "Physical & Health",
+        "activities": ["Went on a walk", "Gym workout", "Other form of workout", "Slept 8 hours"]
+    },
+    "professional": {
+        "name": "Professional & Learning",
+        "activities": ["LeetCode", "Side project", "Resume work", "YouTube learning", "Read a book"]
+    }
+}
 
 # Load user data from a JSON file
 def load_user_data():
@@ -26,48 +44,157 @@ user_data = load_user_data()
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
+    try:
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} command(s)")
+    except Exception as e:
+        print(f"Failed to sync commands: {e}")
 
-@bot.command()
-async def checkin(ctx):
-    # Ask the user what they did today from a checklist
-    embed = discord.Embed(title="What did you do today?")
-    embed.description = "\n".join([f"{index + 1}. {item}" for index, item in enumerate(checklist)])
-    await ctx.send(embed=embed)
+@bot.tree.command(name="checkin", description="Check in with your daily activities")
+async def checkin(interaction: discord.Interaction):
+    # First, show the main categories
+    embed = discord.Embed(title="🏆 Daily Check-in - Choose Categories", description="Select the main categories you want to check in for:", color=discord.Color.blue())
     
-    # Create a response listener
-    def check(m):
-        return m.author == ctx.author and m.channel == ctx.channel
+    for i, (key, category) in enumerate(checklist_categories.items(), 1):
+        embed.add_field(name=f"{i}. {category['name']}", value=f"({len(category['activities'])} activities)", inline=False)
+    
+    embed.set_footer(text="Reply with the numbers of categories you want to check in for (e.g., 1 2)")
+    
+    await interaction.response.send_message(embed=embed)
+    
+    # Wait for category selection
+    def check_category(m):
+        return m.author == interaction.user and m.channel == interaction.channel
     
     try:
-        msg = await bot.wait_for('message', check=check, timeout=30.0)
-        activities = [checklist[int(x)-1] for x in msg.content.split() if x.isdigit()]
+        category_msg = await bot.wait_for('message', check=check_category, timeout=60.0)
+        
+        # Parse category selection
+        try:
+            category_numbers = [int(x) for x in category_msg.content.split() if x.isdigit()]
+            selected_categories = []
+            
+            for num in category_numbers:
+                if 1 <= num <= len(checklist_categories):
+                    category_key = list(checklist_categories.keys())[num-1]
+                    selected_categories.append(category_key)
+                else:
+                    await interaction.followup.send(f"Category number {num} is out of range. Please use numbers 1-{len(checklist_categories)}.")
+                    return
+            
+            if not selected_categories:
+                await interaction.followup.send("No valid categories selected.")
+                return
+                
+        except (ValueError, IndexError) as e:
+            await interaction.followup.send(f"Invalid input. Please use numbers 1-{len(checklist_categories)}.")
+            return
+        
+        # Now show activities for selected categories
+        activities_embed = discord.Embed(title="📋 Select Activities", description="Choose the activities you completed:", color=discord.Color.green())
+        
+        all_activities = []
+        activity_mapping = {}  # Maps display number to (category, activity)
+        display_number = 1
+        
+        for category_key in selected_categories:
+            category = checklist_categories[category_key]
+            activities_embed.add_field(name=f"**{category['name']}**", value="", inline=False)
+            
+            for activity in category['activities']:
+                activities_embed.add_field(name=f"{display_number}. {activity}", value=f"({category['name']})", inline=True)
+                activity_mapping[display_number] = (category_key, activity)
+                all_activities.append(activity)
+                display_number += 1
+        
+        activities_embed.set_footer(text=f"Reply with the numbers of activities you completed (e.g., 1 3 5)")
+        
+        await interaction.followup.send(embed=activities_embed)
+        
+        # Wait for activity selection
+        def check_activities(m):
+            return m.author == interaction.user and m.channel == interaction.channel
+        
+        activity_msg = await bot.wait_for('message', check=check_activities, timeout=60.0)
+        
+        # Parse activity selection
+        try:
+            activity_numbers = [int(x) for x in activity_msg.content.split() if x.isdigit()]
+            selected_activities = []
+            
+            for num in activity_numbers:
+                if num in activity_mapping:
+                    category_key, activity = activity_mapping[num]
+                    selected_activities.append({
+                        'category': category_key,
+                        'activity': activity
+                    })
+                else:
+                    await interaction.followup.send(f"Activity number {num} is not valid. Please use numbers from the list above.")
+                    return
+            
+            if not selected_activities:
+                await interaction.followup.send("No valid activities selected.")
+                return
+                
+        except (ValueError, IndexError) as e:
+            await interaction.followup.send(f"Invalid input. Please use numbers from the activities list.")
+            return
         
         # Get the current date
         from datetime import datetime
         current_date = datetime.now().strftime("%Y-%m-%d")
 
         # Store the activities with the date
-        if ctx.author.id not in user_data:
-            user_data[ctx.author.id] = []
+        if interaction.user.id not in user_data:
+            user_data[interaction.user.id] = []
         
-        user_data[ctx.author.id].append({'date': current_date, 'activities': activities})
+        user_data[interaction.user.id].append({
+            'date': current_date, 
+            'activities': selected_activities
+        })
         
         # Save updated data to the file
         save_user_data(user_data)
         
-        await ctx.send(f"Your check-in for {current_date} was recorded: {', '.join(activities)}")
+        # Create summary message
+        summary = []
+        for item in selected_activities:
+            summary.append(f"{item['activity']} ({checklist_categories[item['category']]['name']})")
+        
+        await interaction.followup.send(f"✅ **Check-in recorded for {current_date}:**\n" + "\n".join([f"• {item}" for item in summary]))
+        
     except asyncio.TimeoutError:
-        await ctx.send("You took too long to respond!")
+        await interaction.followup.send("⏰ You took too long to respond! Check-in cancelled.")
 
-@bot.command()
-async def mycheckins(ctx):
+@bot.tree.command(name="mycheckins", description="View your previous check-ins")
+async def mycheckins(interaction: discord.Interaction):
     # Display the user's previous check-ins with dates
-    if ctx.author.id in user_data:
-        checkins = user_data[ctx.author.id]
-        checkin_str = "\n".join([f"{checkin['date']}: {', '.join(checkin['activities'])}" for checkin in checkins])
-        await ctx.send(f"Your previous check-ins:\n{checkin_str}")
+    if interaction.user.id in user_data:
+        checkins = user_data[interaction.user.id]
+        if checkins:
+            checkin_str = ""
+            for checkin in checkins[-10:]:  # Show last 10
+                activities_summary = []
+                for item in checkin['activities']:
+                    activities_summary.append(f"{item['activity']} ({checklist_categories[item['category']]['name']})")
+                
+                checkin_str += f"📅 **{checkin['date']}:**\n" + "\n".join([f"  • {item}" for item in activities_summary]) + "\n\n"
+            
+            embed = discord.Embed(title="Your Previous Check-ins", description=checkin_str, color=discord.Color.green())
+            await interaction.response.send_message(embed=embed)
+        else:
+            await interaction.response.send_message("You haven't checked in yet!")
     else:
-        await ctx.send("You haven't checked in yet!")
+        await interaction.response.send_message("You haven't checked in yet!")
+
+@bot.tree.command(name="help", description="Show available commands")
+async def help_command(interaction: discord.Interaction):
+    embed = discord.Embed(title="Lock-in Bot Commands", description="Available commands:", color=discord.Color.blue())
+    embed.add_field(name="/checkin", value="Start your daily check-in process with categories and activities", inline=False)
+    embed.add_field(name="/mycheckins", value="View your previous check-ins", inline=False)
+    embed.add_field(name="/help", value="Show this help message", inline=False)
+    await interaction.response.send_message(embed=embed)
 
 # Use environment variable for the bot token
 bot.run(os.getenv('DISCORD_TOKEN'))  # Replace with your bot's token
