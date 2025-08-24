@@ -95,6 +95,12 @@ def load_user_data():
             rows = cur.fetchall()
             print(f"Found {len(rows)} check-in records in database")
             
+            # Debug: Show what user IDs we're finding
+            user_ids_found = set()
+            for row in rows:
+                user_ids_found.add(row['user_id'])
+            print(f"User IDs found in database: {user_ids_found}")
+            
             # Organize data by user and date
             user_data = {}
             for row in rows:
@@ -117,6 +123,7 @@ def load_user_data():
                     user_data[user_id][date][category].append(activity)
             
             print(f"Organized data for {len(user_data)} users")
+            print(f"User IDs in organized data: {list(user_data.keys())}")
             return user_data
             
     except Exception as e:
